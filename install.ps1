@@ -1,39 +1,46 @@
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator);
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    Write-Host -Object:"Requesting Administrator privileges... Please click 'Yes' on the popup." -ForegroundColor:"Yellow";
-    Start-Process -FilePath:"powershell.exe" -ArgumentList:"-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb:"RunAs";
-    exit;
+  Write-Host "Requesting Administrator privileges... Please click 'Yes' on the popup." -ForegroundColor Yellow
+  Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+  exit
 }
 
-$AppDir = "$env:LOCALAPPDATA\ReplyCheckinReminder";
-$SourceScript = "$PSScriptRoot\main.ps1";
-$SourceConfig = "$PSScriptRoot\config.json";
-$TargetScript = "$AppDir\main.ps1";
-$TargetConfig = "$AppDir\config.json";
-$VbsScript = "$AppDir\run_hidden.vbs";
+$AppDir = "$env:LOCALAPPDATA\ReplyCheckinReminder"
+$SourceScript = "$PSScriptRoot\main.ps1"
+$SourceConfig = "$PSScriptRoot\config.json"
+$TargetScript = "$AppDir\main.ps1"
+$TargetConfig = "$AppDir\config.json"
+$VbsScript = "$AppDir\run_hidden.vbs"
 
-Write-Host -Object:"Setting up application files..." -ForegroundColor:"Cyan";
+Write-Host "Setting up application files..." -ForegroundColor Cyan
 
-if (-not (Test-Path -Path:$AppDir)) {
-    New-Item -ItemType:"Directory" -Path:$AppDir | Out-Null;
+if (-not (Test-Path -Path $AppDir)) {
+  New-Item -ItemType Directory -Path $AppDir | Out-Null
 }
 
-Copy-Item -Path:$SourceScript -Destination:$TargetScript -Force:$true;
+Copy-Item -Path $SourceScript -Destination $TargetScript -Force
 
-if (Test-Path -Path:$SourceConfig) {
-    Copy-Item -Path:$SourceConfig -Destination:$TargetConfig -Force:$true;
+$TriggerHour = 9
+if (Test-Path -Path $SourceConfig) {
+  Copy-Item -Path $SourceConfig -Destination $TargetConfig -Force
+  $Config = Get-Content -Path $SourceConfig -Raw | ConvertFrom-Json
+  if ($null -ne $Config.RemoteHourTrigger) {
+    $TriggerHour = [int]$Config.RemoteHourTrigger
+  }
 }
 else {
-    Write-Warning -Message:"config.json not found in the same folder.";
+  Write-Warning "config.json not found in the same folder. Defaulting trigger hour to 09:00."
 }
+
+$FormattedHour = "{0:D2}:00:00" -f $TriggerHour
 
 $vbsCode = @"
 Set objShell = CreateObject("WScript.Shell")
-objShell.Run "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File ""$TargetScript""", 0, False
+objShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""$TargetScript""", 0, True
 "@
-Set-Content -Path:$VbsScript -Value:$vbsCode -Force:$true;
+Set-Content -Path $VbsScript -Value $vbsCode -Force
 
-Write-Host -Object:"Configuring Task Scheduler via XML..." -ForegroundColor:"Cyan";
+Write-Host "Configuring Task Scheduler via XML (Mon-Fri at $FormattedHour)..." -ForegroundColor Cyan
 
 $taskXml = @"
 <?xml version="1.0" encoding="UTF-16"?>
@@ -43,11 +50,18 @@ $taskXml = @"
       <Enabled>true</Enabled>
     </LogonTrigger>
     <CalendarTrigger>
-      <StartBoundary>2024-01-01T09:00:00</StartBoundary>
+      <StartBoundary>2024-01-01T$FormattedHour</StartBoundary>
       <Enabled>true</Enabled>
-      <ScheduleByDay>
-        <DaysInterval>1</DaysInterval>
-      </ScheduleByDay>
+      <ScheduleByWeek>
+        <DaysOfWeek>
+          <Monday />
+          <Tuesday />
+          <Wednesday />
+          <Thursday />
+          <Friday />
+        </DaysOfWeek>
+        <WeeksInterval>1</WeeksInterval>
+      </ScheduleByWeek>
     </CalendarTrigger>
   </Triggers>
   <Settings>
@@ -56,7 +70,7 @@ $taskXml = @"
     <StartWhenAvailable>true</StartWhenAvailable>
     <Hidden>true</Hidden>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <ExecutionTimeLimit>PT12H</ExecutionTimeLimit>
   </Settings>
   <Actions>
     <Exec>
@@ -67,8 +81,8 @@ $taskXml = @"
 </Task>
 "@
 
-Unregister-ScheduledTask -TaskName:"ReplyCheckinReminder" -Confirm:$false -ErrorAction:"SilentlyContinue";
-Register-ScheduledTask -TaskName:"ReplyCheckinReminder" -Xml:$taskXml -User:$env:USERNAME -Force:$true | Out-Null;
+Unregister-ScheduledTask -TaskName "ReplyCheckinReminder" -Confirm:$false -ErrorAction SilentlyContinue
+Register-ScheduledTask -TaskName "ReplyCheckinReminder" -Xml $taskXml -User $env:USERNAME -Force | Out-Null
 
-Write-Host -Object:"Installation Complete! This window will close in 3 seconds." -ForegroundColor:"Green";
-Start-Sleep -Seconds:3;
+Write-Host "Installation Complete! This window will close in 3 seconds." -ForegroundColor Green
+Start-Sleep -Seconds 3
